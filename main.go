@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync/atomic"
 )
@@ -19,6 +21,7 @@ func main() {
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
 	}))
+	serve_mux.HandleFunc("POST /api/validate_chirp", http.HandlerFunc(validationHandler))
 
 	fmt.Println("Starting Chirpy server:")
 	server.ListenAndServe()
@@ -51,4 +54,53 @@ func (cfg *apiConfig) middlewareMetricsReset() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Store(0)
 	})
+}
+
+func validationHandler(w http.ResponseWriter, r *http.Request) {
+	statusCode := 200
+	type parameters struct {
+		Body string `json:"body"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	type returnVals struct {
+		Valid bool `json:"valid"`
+	}
+	respBody := returnVals{
+		Valid: true,
+	}
+	dat, err := json.Marshal(respBody)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	if len(params.Body) > 140 {
+		statusCode = 400
+
+		type returnVals struct {
+			Error string `json:"error"`
+		}
+		respBody := returnVals{
+			Error: "Chirp is too long",
+		}
+		dat, err = json.Marshal(respBody)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(dat)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -72,10 +73,18 @@ func validationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type returnVals struct {
-		Valid bool `json:"valid"`
+		Cleaned_body string `json:"cleaned_body"`
 	}
+	words := strings.Split(params.Body, " ")
+	for i, v := range words {
+		if strings.ToLower(v) == "kerfuffle" || strings.ToLower(v) == "sharbert" || strings.ToLower(v) == "fornax" {
+			words[i] = "****"
+		}
+	}
+	cleaned_sentence := strings.Join(words, " ")
+
 	respBody := returnVals{
-		Valid: true,
+		Cleaned_body: cleaned_sentence,
 	}
 	dat, err := json.Marshal(respBody)
 	if err != nil {

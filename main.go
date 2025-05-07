@@ -1,19 +1,34 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/Drnel/chirpy_btdv/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		fmt.Println("error acquiring connetion to db")
+		return
+	}
+	dbQueries := database.New(db)
+
 	var serve_mux = http.NewServeMux()
 	var server = http.Server{Handler: serve_mux}
 	server.Addr = ":8080"
-	var apiCfg = apiConfig{}
+	var apiCfg = apiConfig{dbQueries: dbQueries}
 	serve_mux.Handle("/app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	serve_mux.Handle("GET /admin/metrics", apiCfg.middlewareMetricsShow())
 	serve_mux.Handle("POST /admin/reset", apiCfg.middlewareMetricsReset())
@@ -30,6 +45,7 @@ func main() {
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries      *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {

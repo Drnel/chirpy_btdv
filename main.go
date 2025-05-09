@@ -41,8 +41,8 @@ func main() {
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
 	}))
-	serve_mux.HandleFunc("POST /api/validate_chirp", http.HandlerFunc(validationHandler))
 	serve_mux.HandleFunc("POST /api/users", http.HandlerFunc(apiCfg.addUser()))
+	serve_mux.HandleFunc("POST /api/chirps", http.HandlerFunc(apiCfg.addChirp()))
 
 	fmt.Println("Starting Chirpy server:")
 	server.ListenAndServe()
@@ -180,9 +180,83 @@ func (cfg *apiConfig) addUser() http.HandlerFunc {
 	})
 }
 
+func (cfg *apiConfig) addChirp() http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		type parameters struct {
+			Body    string        `json:"body"`
+			User_id uuid.NullUUID `json:"user_id"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		if len(params.Body) > 140 {
+			type returnVals struct {
+				Error string `json:"error"`
+			}
+			respBody := returnVals{
+				Error: "Chirp is too long",
+			}
+			dat, err := json.Marshal(respBody)
+			if err != nil {
+				log.Printf("Error marshalling JSON: %s", err)
+				w.WriteHeader(500)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			w.Write(dat)
+			return
+		}
+
+		chirp, err := cfg.dbQueries.AddChirp(r.Context(), database.AddChirpParams{
+			Body:   params.Body,
+			UserID: params.User_id,
+		})
+		if err != nil {
+			log.Printf("Error getting database user registered: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		returnChirp := Chirp{}
+		returnChirp.Body = chirp.Body
+		returnChirp.CreatedAt = chirp.CreatedAt
+		returnChirp.UpdatedAt = chirp.UpdatedAt
+		returnChirp.ID = chirp.ID
+		returnChirp.User_id = chirp.UserID.UUID
+
+		dat, err := json.Marshal(returnChirp)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		w.Write(dat)
+
+	})
+}
+
 type User struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+}
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	User_id   uuid.UUID `json:"user_id"`
 }

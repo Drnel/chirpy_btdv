@@ -9,8 +9,10 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/Drnel/chirpy_btdv/internal/database"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -24,11 +26,13 @@ func main() {
 		return
 	}
 	dbQueries := database.New(db)
+	defer db.Close()
 
 	var serve_mux = http.NewServeMux()
 	var server = http.Server{Handler: serve_mux}
 	server.Addr = ":8080"
 	var apiCfg = apiConfig{dbQueries: dbQueries}
+
 	serve_mux.Handle("/app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	serve_mux.Handle("GET /admin/metrics", apiCfg.middlewareMetricsShow())
 	serve_mux.Handle("POST /admin/reset", apiCfg.middlewareMetricsReset())
@@ -38,6 +42,7 @@ func main() {
 		w.Write([]byte("OK"))
 	}))
 	serve_mux.HandleFunc("POST /api/validate_chirp", http.HandlerFunc(validationHandler))
+	serve_mux.HandleFunc("POST /api/users", http.HandlerFunc(apiCfg.addUser()))
 
 	fmt.Println("Starting Chirpy server:")
 	server.ListenAndServe()
@@ -69,7 +74,13 @@ func (cfg *apiConfig) middlewareMetricsShow() http.Handler {
 
 func (cfg *apiConfig) middlewareMetricsReset() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("PLATFORM") != "dev" {
+			w.WriteHeader(403)
+			return
+		}
+		cfg.dbQueries.ResetUsers(r.Context())
 		cfg.fileserverHits.Store(0)
+
 	})
 }
 
@@ -128,4 +139,50 @@ func validationHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	w.Write(dat)
+}
+
+func (cfg *apiConfig) addUser() http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		type parameters struct {
+			Email string `json:"email"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		user, err := cfg.dbQueries.CreateUser(r.Context(), params.Email)
+		if err != nil {
+			log.Printf("Error getting database user registered: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		returnUser := User{}
+		returnUser.ID = user.ID
+		returnUser.CreatedAt = user.CreatedAt
+		returnUser.UpdatedAt = user.UpdatedAt
+		returnUser.Email = user.Email
+
+		dat, err := json.Marshal(returnUser)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		w.Write(dat)
+	})
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }

@@ -43,6 +43,7 @@ func main() {
 	}))
 	serve_mux.HandleFunc("POST /api/users", http.HandlerFunc(apiCfg.addUser()))
 	serve_mux.HandleFunc("POST /api/chirps", http.HandlerFunc(apiCfg.addChirp()))
+	serve_mux.HandleFunc("GET /api/chirps", http.HandlerFunc(apiCfg.RetrieveChirps()))
 
 	fmt.Println("Starting Chirpy server:")
 	server.ListenAndServe()
@@ -243,6 +244,37 @@ func (cfg *apiConfig) addChirp() http.HandlerFunc {
 		w.WriteHeader(201)
 		w.Write(dat)
 
+	})
+}
+func (cfg *apiConfig) RetrieveChirps() http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chirps, err := cfg.dbQueries.RetrieveChirps(r.Context())
+		if err != nil {
+			log.Printf("Error retrieving chirps from database %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		returnChirps := []Chirp{}
+		for _, chirp := range chirps {
+			returnChirp := Chirp{}
+			returnChirp.ID = chirp.ID
+			returnChirp.CreatedAt = chirp.CreatedAt
+			returnChirp.UpdatedAt = chirp.UpdatedAt
+			returnChirp.Body = chirp.Body
+			returnChirp.User_id = chirp.UserID.UUID
+			returnChirps = append(returnChirps, returnChirp)
+		}
+
+		dat, err := json.Marshal(returnChirps)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(dat)
 	})
 }
 

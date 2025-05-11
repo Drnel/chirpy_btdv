@@ -44,6 +44,7 @@ func main() {
 	serve_mux.HandleFunc("POST /api/users", http.HandlerFunc(apiCfg.addUser()))
 	serve_mux.HandleFunc("POST /api/chirps", http.HandlerFunc(apiCfg.addChirp()))
 	serve_mux.HandleFunc("GET /api/chirps", http.HandlerFunc(apiCfg.RetrieveChirps()))
+	serve_mux.HandleFunc("GET /api/chirps/{chirpID}", http.HandlerFunc(apiCfg.getChirpById()))
 
 	fmt.Println("Starting Chirpy server:")
 	server.ListenAndServe()
@@ -266,6 +267,44 @@ func (cfg *apiConfig) RetrieveChirps() http.HandlerFunc {
 		}
 
 		dat, err := json.Marshal(returnChirps)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(dat)
+	})
+}
+
+func (cfg *apiConfig) getChirpById() http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("chirpID"))
+		if err != nil {
+			log.Printf("Error converting text to uuid: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		chirps, err := cfg.dbQueries.GetChirpById(r.Context(), id)
+		if err != nil {
+			log.Printf("Error getting chirp from database by id: **%s**", err)
+			w.WriteHeader(500)
+			return
+		}
+		if len(chirps) == 0 {
+			w.WriteHeader(404)
+			return
+		}
+		returnChirp := Chirp{}
+		returnChirp.ID = chirps[0].ID
+		returnChirp.CreatedAt = chirps[0].CreatedAt
+		returnChirp.UpdatedAt = chirps[0].UpdatedAt
+		returnChirp.Body = chirps[0].Body
+		returnChirp.User_id = chirps[0].UserID.UUID
+
+		dat, err := json.Marshal(returnChirp)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			w.WriteHeader(500)

@@ -11,10 +11,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Drnel/chirpy_btdv/internal/auth"
 	"github.com/Drnel/chirpy_btdv/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -45,6 +47,7 @@ func main() {
 	serve_mux.HandleFunc("POST /api/chirps", http.HandlerFunc(apiCfg.addChirp()))
 	serve_mux.HandleFunc("GET /api/chirps", http.HandlerFunc(apiCfg.RetrieveChirps()))
 	serve_mux.HandleFunc("GET /api/chirps/{chirpID}", http.HandlerFunc(apiCfg.getChirpById()))
+	serve_mux.HandleFunc("POST /api/login", http.HandlerFunc(apiCfg.loginUser()))
 
 	fmt.Println("Starting Chirpy server:")
 	server.ListenAndServe()
@@ -147,7 +150,8 @@ func (cfg *apiConfig) addUser() http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		type parameters struct {
-			Email string `json:"email"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
 		decoder := json.NewDecoder(r.Body)
 		params := parameters{}
@@ -157,7 +161,16 @@ func (cfg *apiConfig) addUser() http.HandlerFunc {
 			w.WriteHeader(500)
 			return
 		}
-		user, err := cfg.dbQueries.CreateUser(r.Context(), params.Email)
+		hashed_password, err := auth.HashPassword(params.Password)
+		if err != nil {
+			log.Printf("Error hashing password: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		user, err := cfg.dbQueries.CreateUser(r.Context(), database.CreateUserParams{
+			Email:          params.Email,
+			HashedPassword: hashed_password,
+		})
 		if err != nil {
 			log.Printf("Error getting database user registered: %s", err)
 			w.WriteHeader(500)
@@ -305,6 +318,55 @@ func (cfg *apiConfig) getChirpById() http.HandlerFunc {
 		returnChirp.User_id = chirps[0].UserID.UUID
 
 		dat, err := json.Marshal(returnChirp)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(dat)
+	})
+}
+
+func (cfg *apiConfig) loginUser() http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		type parameters struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		user, err := cfg.dbQueries.GetUserByEmail(r.Context(), params.Email)
+		if err != nil {
+			w.Header().Add("Content-type", "text/plain; charset=utf-8")
+			w.WriteHeader(401)
+			w.Write([]byte("Incorrect email or password"))
+			return
+		}
+		if bcrypt.CompareHashAndPassword(
+			[]byte(user.HashedPassword), []byte(params.Password)) != nil {
+			w.Header().Add("Content-type", "text/plain; charset=utf-8")
+			w.WriteHeader(401)
+			w.Write([]byte("Incorrect email or password"))
+			return
+		}
+		returnUser := User{}
+
+		returnUser.ID = user.ID
+		returnUser.CreatedAt = user.CreatedAt
+		returnUser.UpdatedAt = user.UpdatedAt
+		returnUser.Email = user.Email
+
+		dat, err := json.Marshal(returnUser)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			w.WriteHeader(500)

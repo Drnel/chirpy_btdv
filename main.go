@@ -34,6 +34,7 @@ func main() {
 	var server = http.Server{Handler: serve_mux}
 	server.Addr = ":8080"
 	var apiCfg = apiConfig{dbQueries: dbQueries}
+	apiCfg.jwt_secret = os.Getenv("JWT_SECRET")
 
 	serve_mux.Handle("/app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	serve_mux.Handle("GET /admin/metrics", apiCfg.middlewareMetricsShow())
@@ -56,6 +57,7 @@ func main() {
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
+	jwt_secret     string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -197,10 +199,8 @@ func (cfg *apiConfig) addUser() http.HandlerFunc {
 
 func (cfg *apiConfig) addChirp() http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
 		type parameters struct {
-			Body    string        `json:"body"`
-			User_id uuid.NullUUID `json:"user_id"`
+			Body string `json:"body"`
 		}
 		decoder := json.NewDecoder(r.Body)
 		params := parameters{}
@@ -210,7 +210,18 @@ func (cfg *apiConfig) addChirp() http.HandlerFunc {
 			w.WriteHeader(500)
 			return
 		}
-
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			log.Printf("Error reading auth token: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		token_uuid, err := auth.ValidateJWT(token, cfg.jwt_secret)
+		if err != nil {
+			log.Printf("Invalid jwt: %s", err)
+			w.WriteHeader(401)
+			return
+		}
 		if len(params.Body) > 140 {
 			type returnVals struct {
 				Error string `json:"error"`
@@ -233,7 +244,7 @@ func (cfg *apiConfig) addChirp() http.HandlerFunc {
 
 		chirp, err := cfg.dbQueries.AddChirp(r.Context(), database.AddChirpParams{
 			Body:   params.Body,
-			UserID: params.User_id,
+			UserID: uuid.NullUUID{UUID: token_uuid, Valid: true},
 		})
 		if err != nil {
 			log.Printf("Error getting database user registered: %s", err)
@@ -334,8 +345,9 @@ func (cfg *apiConfig) loginUser() http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		type parameters struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
+			Email              string `json:"email"`
+			Password           string `json:"password"`
+			Expires_in_seconds int    `json:"expires_in_seconds"`
 		}
 		decoder := json.NewDecoder(r.Body)
 		params := parameters{}
@@ -345,6 +357,13 @@ func (cfg *apiConfig) loginUser() http.HandlerFunc {
 			w.WriteHeader(500)
 			return
 		}
+		Expiration_time := time.Hour
+		if params.Expires_in_seconds != 0 {
+			Expiration_time = time.Second * time.Duration(params.Expires_in_seconds)
+			if Expiration_time > time.Hour {
+				Expiration_time = time.Hour
+			}
+		}
 		user, err := cfg.dbQueries.GetUserByEmail(r.Context(), params.Email)
 		if err != nil {
 			w.Header().Add("Content-type", "text/plain; charset=utf-8")
@@ -352,27 +371,32 @@ func (cfg *apiConfig) loginUser() http.HandlerFunc {
 			w.Write([]byte("Incorrect email or password"))
 			return
 		}
-		if bcrypt.CompareHashAndPassword(
-			[]byte(user.HashedPassword), []byte(params.Password)) != nil {
+		if bcrypt.CompareHashAndPassword([]byte(user.HashedPassword), []byte(params.Password)) != nil {
 			w.Header().Add("Content-type", "text/plain; charset=utf-8")
 			w.WriteHeader(401)
 			w.Write([]byte("Incorrect email or password"))
 			return
 		}
-		returnUser := User{}
 
+		token, err := auth.MakeJWT(user.ID, cfg.jwt_secret, Expiration_time)
+		if err != nil {
+			log.Printf("Error generating jwt: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		returnUser := User{}
 		returnUser.ID = user.ID
 		returnUser.CreatedAt = user.CreatedAt
 		returnUser.UpdatedAt = user.UpdatedAt
 		returnUser.Email = user.Email
-
+		returnUser.Token = token
 		dat, err := json.Marshal(returnUser)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			w.WriteHeader(500)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		w.Write(dat)
@@ -384,6 +408,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type Chirp struct {
